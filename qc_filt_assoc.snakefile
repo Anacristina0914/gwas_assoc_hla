@@ -1,0 +1,233 @@
+import os
+import pandas as pd
+import shutil
+onsuccess:
+    shutil.rmtree(".snakemake")
+
+# Inputs
+# =====================================================
+PHENO_FILE = config["pheno_file"]
+PHENO_COLS = config["phenotypes"]
+BFILE = config["bfile"]
+OUTDIR = config["out_dir"]
+
+# Output prefixes
+# ======================================================
+FILTERED_QC = os.path.join(OUTDIR, "01_filt", "qc_filt")
+ASSOC   = os.path.join(OUTDIR, "02_assoc")
+MODELS = os.path.join(OUTDIR, "03_models")
+HLA_DIR = os.path.join(OUTDIR, "04_filt_assoc", "hla")
+AA_DIR  = os.path.join(OUTDIR, "04_filt_assoc", "aa")
+INDEL_DIR = os.path.join(OUTDIR, "04_filt_assoc", "indels")
+PLOTS_DIR = os.path.join(OUTDIR, "05_assoc_plots", "aa")
+SUMMARY_DIR = os.path.join(OUTDIR, "06_assoc_summary", "aa")
+#LD    = os.path.join(OUTDIR, "03_LD_calc")
+
+rule all:
+     input:
+        expand(os.path.join(ASSOC, "{pheno}.assoc.adjusted"), pheno=PHENO_COLS),
+        expand(os.path.join(MODELS, "{pheno}.model"), pheno=PHENO_COLS),
+        expand(os.path.join(HLA_DIR, "{pheno}.hla.assoc"), pheno=PHENO_COLS),
+        expand(os.path.join(AA_DIR,  "{pheno}.aa.assoc"), pheno=PHENO_COLS),
+        expand(os.path.join(INDEL_DIR, "{pheno}.indels.assoc"), pheno=PHENO_COLS),
+        expand(os.path.join(AA_DIR, "{pheno}.aa_labs.assoc"), pheno=PHENO_COLS),
+        os.path.join(PLOTS_DIR, "assoc_typeI.jpeg"),
+        os.path.join(PLOTS_DIR, "assoc_typeII.jpeg"),
+        os.path.join(PLOTS_DIR, "top_hm_assoc_typeI.jpeg"),
+        os.path.join(PLOTS_DIR, "top_hm_assoc_typeII.jpeg"),
+        os.path.join(SUMMARY_DIR, "assoc_summary.tab")
+        
+
+# Step 1: QC filtering
+# =========================================================
+rule run_qc_filt:
+    input:
+        bed = BFILE + ".bed",
+        bim = BFILE + ".bim",
+        fam = BFILE + ".fam",
+        filt_in = config["filt_in"]
+    conda:
+        "plink_env"
+    output:
+        bed = FILTERED_QC + ".bed",
+        bim = FILTERED_QC + ".bim",
+        fam = FILTERED_QC + ".fam"
+    params:
+        maf  = config["maf"],
+        geno = config["geno"],
+        hwe  = config["hwe"],
+        filt = FILTERED_QC,
+        bfile_prefix = BFILE
+    log:
+        os.path.join(OUTDIR, "logs", "plink_qc_filter.log")
+    shell:
+        """
+        mkdir -p $(dirname {params.filt})
+        mkdir -p $(dirname {log})
+        plink --bfile {params.bfile_prefix} \
+            --keep {input.filt_in} \
+            --maf {params.maf} \
+            --geno {params.geno} \
+            --hwe {params.hwe} \
+            --make-bed \
+            --out {params.filt} > {log} 2>&1
+        """
+# Step 2: Associations
+# ==========================================================
+rule plink_assoc:
+    input:
+        bed = FILTERED_QC + ".bed",
+        bim = FILTERED_QC + ".bim",
+        fam = FILTERED_QC + ".fam",
+        pheno = PHENO_FILE
+    conda:
+        "plink_env"
+    output:
+        assoc = os.path.join(ASSOC, "{pheno}.assoc"),
+        adjust = os.path.join(ASSOC, "{pheno}.assoc.adjusted")
+    params:
+        ci = config["assoc_ci"],
+        out = os.path.join(ASSOC, "{pheno}"),
+        bfile_prefix = FILTERED_QC
+    log:
+        os.path.join(OUTDIR, "logs", "assoc_{pheno}.log")
+    shell:
+        """
+        mkdir -p {ASSOC}
+        plink --bfile {params.bfile_prefix} \
+            --pheno {input.pheno} \
+            --pheno-name {wildcards.pheno} \
+            --assoc --ci {params.ci} --adjust \
+            --out {params.out} > {log} 2>&1
+        """
+
+# Step 3: Model test per phenotype
+# ===========================================================
+rule plink_model:
+    input:
+        bed = FILTERED_QC + ".bed",
+        bim = FILTERED_QC + ".bim",
+        fam = FILTERED_QC + ".fam",
+        pheno = PHENO_FILE
+    conda:
+        "plink_env"
+    output:
+        model = os.path.join(MODELS, "{pheno}.model")
+    params:
+        out = os.path.join(MODELS, "{pheno}"),
+        bfile_prefix = FILTERED_QC
+    log:
+        os.path.join(OUTDIR, "logs", "model_{pheno}.log")
+    shell:
+        """
+        mkdir -p {MODELS}
+        plink --bfile {params.bfile_prefix} \
+              --pheno {input.pheno} \
+              --pheno-name {wildcards.pheno} \
+              --model \
+              --out {params.out} > {log} 2>&1
+        """
+
+# Step 4: Extract only HLA alleles according to user-provided regex
+# ==================================================================
+rule extract_hla:
+    input:
+        assoc = os.path.join(ASSOC, "{pheno}.assoc")
+    output:
+        hla = os.path.join(HLA_DIR, "{pheno}.hla.assoc")
+    conda:
+        "plink_env"
+    params:
+        pattern = lambda wildcards: config["hla_pattern"],
+        hla_dir = lambda wildcards: HLA_DIR 
+    log:
+        os.path.join(OUTDIR, "logs", "hla_{pheno}.log")
+    shell:
+        """
+        mkdir -p {params.hla_dir}
+        mkdir -p $(dirname {log})
+        head -n 1 {input.assoc} > {output.hla}
+        awk 'NR==1 || $2 ~ /{params.pattern}/' {input.assoc} > {output.hla} 2> {log}
+        echo "Extracted $(wc -l < {output.hla}) HLA variants for {params.pattern}" >> {log}
+        """
+# Step 5: Extract aminoacids according to user-provided regex
+# =================================================================
+rule extract_aa:
+    input:
+        assoc = os.path.join(ASSOC, "{pheno}.assoc")
+    output:
+        aa = os.path.join(AA_DIR, "{pheno}.aa.assoc")
+    conda:
+        "plink_env"
+    params:
+        pattern = lambda wildcards: config["aa_pattern"],
+        aa_dir  = lambda wildcards: AA_DIR
+    log:
+        os.path.join(OUTDIR, "logs", "aa_{pheno}.log")
+    shell:
+        """
+        mkdir -p {params.aa_dir}
+        mkdir -p $(dirname {log})
+        head -n 1 {input.assoc} > {output.aa}
+        awk 'NR==1 || $2 ~ /{params.pattern}/' {input.assoc} > {output.aa} 2> {log}
+        echo "Extracted $(wc -l < {output.aa}) AA variants for {params.pattern}" >> {log}
+        """
+## Step 5.1: Extract insertions and deletions from association files
+# =================================================================
+rule extract_indels:
+    input:
+        assoc = os.path.join(ASSOC, "{pheno}.assoc")
+    output:
+        indels = os.path.join(INDEL_DIR, "{pheno}.indels.assoc")
+    conda:
+        "plink_env"
+    params:
+        indel_dir = INDEL_DIR
+    log:
+        os.path.join(OUTDIR, "logs", "indels_{pheno}.log")
+    shell:
+        """
+        mkdir -p {params.indel_dir}
+        mkdir -p $(dirname {log})
+        awk 'NR==1 || $2 ~ /INS/' {input.assoc} > {output.indels} 2> {log}
+        awk '$2 ~ /x$/' {input.assoc} >> {output.indels} 2>> {log}
+        echo "Extracted $(wc -l < {output.indels}) indel variants for {wildcards.pheno}" >> {log}
+        """ 
+
+# Step 6: Make allele labels for plotting.
+# =====================================================================
+rule make_aa_labels:
+    input:
+        assoc_filt = os.path.join(AA_DIR, "{pheno}.aa.assoc")
+    output:
+        aa_labs = os.path.join(AA_DIR, "{pheno}.aa_labs.assoc")
+    conda:
+        "plink_env"
+    run:
+        import pandas as pd
+        aa_df = pd.read_csv(input.assoc_filt, sep=r"\s+")
+        aa_df[["type", "locus", "position", "genomic", "residue"]] = (
+            aa_df["SNP"].str.split("_", expand=True, n=4)
+            )
+        aa_df["aa"] = aa_df.apply(
+            lambda row: row["A1"] if pd.isna(row["residue"]) else row["residue"],
+            axis=1
+            )
+        aa_df.to_csv(output.aa_labs, index=None, sep="\t")
+
+# Step 7: Make association plots for aminoacids
+# =======================================================================
+rule plot_aa_assoc:
+    input:
+        aa_labs = expand(os.path.join(AA_DIR, "{pheno}.aa_labs.assoc"), pheno=PHENO_COLS)
+    output:
+        type1_aa_plot = os.path.join(PLOTS_DIR, "assoc_typeI.jpeg"),
+        type2_aa_plot = os.path.join(PLOTS_DIR, "assoc_typeII.jpeg"),
+        hm_type1_plot = os.path.join(PLOTS_DIR, "top_hm_assoc_typeI.jpeg"),
+        hm_type2_plot = os.path.join(PLOTS_DIR, "top_hm_assoc_typeII.jpeg"),
+        summary_table = os.path.join(SUMMARY_DIR, "assoc_summary.tab")
+    params:
+        group_cols = config["group_cols"],
+        top_n = config["top_n"]
+    script:
+        config["scripts"]["aa_assoc_plot"]
