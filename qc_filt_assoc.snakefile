@@ -31,6 +31,8 @@ rule all:
         expand(os.path.join(AA_DIR,  "{pheno}.aa.assoc"), pheno=PHENO_COLS),
         expand(os.path.join(INDEL_DIR, "{pheno}.indels.assoc"), pheno=PHENO_COLS),
         expand(os.path.join(AA_DIR, "{pheno}.aa_labs.assoc"), pheno=PHENO_COLS),
+        expand(os.path.join(HLA_DIR, "{pheno}.hla_labs.assoc"), pheno=PHENO_COLS),
+        expand(os.path.join(INDEL_DIR, "{pheno}.indels_labs.assoc"), pheno=PHENO_COLS),
         os.path.join(PLOTS_DIR, "assoc_typeI.jpeg"),
         os.path.join(PLOTS_DIR, "assoc_typeII.jpeg"),
         os.path.join(PLOTS_DIR, "top_hm_assoc_typeI.jpeg"),
@@ -128,7 +130,7 @@ rule plink_model:
               --out {params.out} > {log} 2>&1
         """
 
-# Step 4: Extract only HLA alleles according to user-provided regex
+# Step 5.1: Extract only HLA alleles according to user-provided regex
 # ==================================================================
 rule extract_hla:
     input:
@@ -139,7 +141,7 @@ rule extract_hla:
         "plink_env"
     params:
         pattern = lambda wildcards: config["hla_pattern"],
-        hla_dir = lambda wildcards: HLA_DIR 
+        hla_dir = lambda wildcards: HLA_DIR
     log:
         os.path.join(OUTDIR, "logs", "hla_{pheno}.log")
     shell:
@@ -150,7 +152,7 @@ rule extract_hla:
         awk 'NR==1 || $2 ~ /{params.pattern}/' {input.assoc} > {output.hla} 2> {log}
         echo "Extracted $(wc -l < {output.hla}) HLA variants for {params.pattern}" >> {log}
         """
-# Step 5: Extract aminoacids according to user-provided regex
+# Step 5.2: Extract aminoacids according to user-provided regex
 # =================================================================
 rule extract_aa:
     input:
@@ -169,10 +171,10 @@ rule extract_aa:
         mkdir -p {params.aa_dir}
         mkdir -p $(dirname {log})
         head -n 1 {input.assoc} > {output.aa}
-        awk 'NR==1 || $2 ~ /{params.pattern}/' {input.assoc} > {output.aa} 2> {log}
+        awk 'NR==1 || ($2 ~ /{params.pattern}/ && $2 !~ /_x$/)' {input.assoc} > {output.aa} 2> {log}
         echo "Extracted $(wc -l < {output.aa}) AA variants for {params.pattern}" >> {log}
         """
-## Step 5.1: Extract insertions and deletions from association files
+## Step 5.3: Extract insertions and deletions from association files
 # =================================================================
 rule extract_indels:
     input:
@@ -182,7 +184,7 @@ rule extract_indels:
     conda:
         "plink_env"
     params:
-        indel_dir = INDEL_DIR
+        indel_dir = lambda wildcards: INDEL_DIR
     log:
         os.path.join(OUTDIR, "logs", "indels_{pheno}.log")
     shell:
@@ -196,24 +198,44 @@ rule extract_indels:
 
 # Step 6: Make allele labels for plotting.
 # =====================================================================
-rule make_aa_labels:
+rule make_labels:
     input:
-        assoc_filt = os.path.join(AA_DIR, "{pheno}.aa.assoc")
+        aa_filt = os.path.join(AA_DIR, "{pheno}.aa.assoc"),
+        hla_filt = os.path.join(HLA_DIR, "{pheno}.hla.assoc"),
+        indel_filt = os.path.join(INDEL_DIR, "{pheno}.indels.assoc")
     output:
-        aa_labs = os.path.join(AA_DIR, "{pheno}.aa_labs.assoc")
+        aa_labs = os.path.join(AA_DIR, "{pheno}.aa_labs.assoc"),
+        hla_labs = os.path.join(HLA_DIR, "{pheno}.hla_labs.assoc"),
+        indel_labs = os.path.join(INDEL_DIR, "{pheno}.indels_labs.assoc")
     conda:
         "plink_env"
     run:
         import pandas as pd
-        aa_df = pd.read_csv(input.assoc_filt, sep=r"\s+")
+        # Make labels for aminoacids by parsing the SNP column
+        aa_df = pd.read_csv(input.aa_filt, sep=r"\s+")
         aa_df[["type", "locus", "position", "genomic", "residue"]] = (
-            aa_df["SNP"].str.split("_", expand=True, n=4)
+            aa_df["SNP"].str.split("_", expand=True, n=5)
             )
         aa_df["aa"] = aa_df.apply(
             lambda row: row["A1"] if pd.isna(row["residue"]) else row["residue"],
             axis=1
             )
         aa_df.to_csv(output.aa_labs, index=None, sep="\t")
+
+        # Make labels for hla alleles by parsing the SNP column
+        hla_df = pd.read_csv(input.hla_filt, sep=r"\s+")
+        hla_df[["HLA", "gene", "allele"]] = (
+            hla_df["SNP"].str.split("_", expand=True, n=2)
+            )
+        hla_df.to_csv(output.hla_labs, index=None, sep="\t") 
+
+        # Make labels for indels by parsing the SNP column
+        indel_df = pd.read_csv(input.indel_filt, sep=r"\s+")
+        indel_df[["variant","gene", "position", "insertion_del"]] = (
+            indel_df["SNP"].str.split("_", expand=True, n=3)
+            )
+        indel_df.to_csv(output.indel_labs, index=None, sep="\t") 
+
 
 # Step 7: Make association plots for aminoacids
 # =======================================================================
