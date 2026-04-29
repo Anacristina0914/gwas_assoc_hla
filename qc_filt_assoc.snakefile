@@ -25,14 +25,15 @@ SUMMARY_DIR = os.path.join(OUTDIR, "06_assoc_summary", "aa")
 
 rule all:
      input:
-        expand(os.path.join(ASSOC, "{pheno}.assoc.adjusted"), pheno=PHENO_COLS),
+        expand(os.path.join(ASSOC, "nocovar", "{pheno}.assoc.adjusted"), pheno=PHENO_COLS),
         expand(os.path.join(MODELS, "{pheno}.model"), pheno=PHENO_COLS),
-        expand(os.path.join(HLA_DIR, "{pheno}.hla.assoc"), pheno=PHENO_COLS),
-        expand(os.path.join(AA_DIR,  "{pheno}.aa.assoc"), pheno=PHENO_COLS),
-        expand(os.path.join(INDEL_DIR, "{pheno}.indels.assoc"), pheno=PHENO_COLS),
-        expand(os.path.join(AA_DIR, "{pheno}.aa_labs.assoc"), pheno=PHENO_COLS),
-        expand(os.path.join(HLA_DIR, "{pheno}.hla_labs.assoc"), pheno=PHENO_COLS),
-        expand(os.path.join(INDEL_DIR, "{pheno}.indels_labs.assoc"), pheno=PHENO_COLS),
+        expand(os.path.join(ASSOC, "covar", "{pheno}.assoc.logistic"), pheno=PHENO_COLS),
+        expand(os.path.join(HLA_DIR, "{pheno}.hla.assoc.logistic"), pheno=PHENO_COLS),
+        expand(os.path.join(AA_DIR,  "{pheno}.aa.assoc.logistic"), pheno=PHENO_COLS),
+        expand(os.path.join(INDEL_DIR, "{pheno}.indels.assoc.logistic"), pheno=PHENO_COLS),
+        expand(os.path.join(AA_DIR, "{pheno}.aa_labs.assoc.logistic"), pheno=PHENO_COLS),
+        expand(os.path.join(HLA_DIR, "{pheno}.hla_labs.assoc.logistic"), pheno=PHENO_COLS),
+        expand(os.path.join(INDEL_DIR, "{pheno}.indels_labs.assoc.logistic"), pheno=PHENO_COLS),
         os.path.join(PLOTS_DIR, "assoc_typeI.jpeg"),
         os.path.join(PLOTS_DIR, "assoc_typeII.jpeg"),
         os.path.join(PLOTS_DIR, "top_hm_assoc_typeI.jpeg"),
@@ -85,21 +86,50 @@ rule plink_assoc:
     conda:
         "plink_env"
     output:
-        assoc = os.path.join(ASSOC, "{pheno}.assoc"),
-        adjust = os.path.join(ASSOC, "{pheno}.assoc.adjusted")
+        assoc = os.path.join(ASSOC, "nocovar", "{pheno}.assoc"),
+        adjust = os.path.join(ASSOC, "nocovar", "{pheno}.assoc.adjusted")
     params:
         ci = config["assoc_ci"],
-        out = os.path.join(ASSOC, "{pheno}"),
+        out = os.path.join(ASSOC, "nocovar", "{pheno}"),
         bfile_prefix = FILTERED_QC
     log:
         os.path.join(OUTDIR, "logs", "assoc_{pheno}.log")
     shell:
         """
-        mkdir -p {ASSOC}
+        mkdir -p {ASSOC}/nocovar
         plink --bfile {params.bfile_prefix} \
             --pheno {input.pheno} \
             --pheno-name {wildcards.pheno} \
             --assoc --ci {params.ci} --adjust \
+            --out {params.out} > {log} 2>&1
+        """
+rule plink_logist_assoc:
+    input:
+        bed = FILTERED_QC + ".bed",
+        bim = FILTERED_QC + ".bim",
+        fam = FILTERED_QC + ".fam",
+        pheno = PHENO_FILE
+    conda:
+        "plink_env"
+    output:
+        assoc = os.path.join(ASSOC, "covar", "{pheno}.assoc.logistic"),
+        adjust = os.path.join(ASSOC, "covar", "{pheno}.assoc.logistic.adjusted")
+    params:
+        ci = config["assoc_ci"],
+        out = os.path.join(ASSOC, "covar", "{pheno}"),
+        bfile_prefix = FILTERED_QC,
+        adjust_vars = config["adjust_vars"]
+    log:
+        os.path.join(OUTDIR, "logs", "logist_assoc_{pheno}.log")
+    shell:
+        """
+        mkdir -p {ASSOC}/covar
+        plink --bfile {params.bfile_prefix} \
+            --pheno {input.pheno} \
+            --pheno-name {wildcards.pheno} \
+            --logistic --ci {params.ci} --adjust \
+            --covar {input.pheno} \
+            --covar-name {params.adjust_vars} \
             --out {params.out} > {log} 2>&1
         """
 
@@ -134,9 +164,9 @@ rule plink_model:
 # ==================================================================
 rule extract_hla:
     input:
-        assoc = os.path.join(ASSOC, "{pheno}.assoc")
+        assoc = os.path.join(ASSOC, "covar", "{pheno}.assoc.logistic")
     output:
-        hla = os.path.join(HLA_DIR, "{pheno}.hla.assoc")
+        hla = os.path.join(HLA_DIR, "{pheno}.hla.assoc.logistic")
     conda:
         "plink_env"
     params:
@@ -148,17 +178,18 @@ rule extract_hla:
         """
         mkdir -p {params.hla_dir}
         mkdir -p $(dirname {log})
-        head -n 1 {input.assoc} > {output.hla}
-        awk 'NR==1 || $2 ~ /{params.pattern}/' {input.assoc} > {output.hla} 2> {log}
+        awk 'NR==1 || $2 ~ /{params.pattern}/ && $5=="ADD"' {input.assoc} > {output.hla} 2> {log}
         echo "Extracted $(wc -l < {output.hla}) HLA variants for {params.pattern}" >> {log}
         """
+# head -n 1 {input.assoc} > {output.hla}
+
 # Step 5.2: Extract aminoacids according to user-provided regex
 # =================================================================
 rule extract_aa:
     input:
-        assoc = os.path.join(ASSOC, "{pheno}.assoc")
+        assoc = os.path.join(ASSOC, "covar", "{pheno}.assoc.logistic")
     output:
-        aa = os.path.join(AA_DIR, "{pheno}.aa.assoc")
+        aa = os.path.join(AA_DIR, "{pheno}.aa.assoc.logistic")
     conda:
         "plink_env"
     params:
@@ -171,16 +202,16 @@ rule extract_aa:
         mkdir -p {params.aa_dir}
         mkdir -p $(dirname {log})
         head -n 1 {input.assoc} > {output.aa}
-        awk 'NR==1 || ($2 ~ /{params.pattern}/ && $2 !~ /_x$/)' {input.assoc} > {output.aa} 2> {log}
+        awk 'NR==1 || ($2 ~ /{params.pattern}/ && $2 !~ /_x$/ && $5=="ADD")' {input.assoc} > {output.aa} 2> {log}
         echo "Extracted $(wc -l < {output.aa}) AA variants for {params.pattern}" >> {log}
         """
 ## Step 5.3: Extract insertions and deletions from association files
 # =================================================================
 rule extract_indels:
     input:
-        assoc = os.path.join(ASSOC, "{pheno}.assoc")
+        assoc = os.path.join(ASSOC, "covar", "{pheno}.assoc.logistic")
     output:
-        indels = os.path.join(INDEL_DIR, "{pheno}.indels.assoc")
+        indels = os.path.join(INDEL_DIR, "{pheno}.indels.assoc.logistic")
     conda:
         "plink_env"
     params:
@@ -200,13 +231,13 @@ rule extract_indels:
 # =====================================================================
 rule make_labels:
     input:
-        aa_filt = os.path.join(AA_DIR, "{pheno}.aa.assoc"),
-        hla_filt = os.path.join(HLA_DIR, "{pheno}.hla.assoc"),
-        indel_filt = os.path.join(INDEL_DIR, "{pheno}.indels.assoc")
+        aa_filt = os.path.join(AA_DIR, "{pheno}.aa.assoc.logistic"),
+        hla_filt = os.path.join(HLA_DIR, "{pheno}.hla.assoc.logistic"),
+        indel_filt = os.path.join(INDEL_DIR, "{pheno}.indels.assoc.logistic")
     output:
-        aa_labs = os.path.join(AA_DIR, "{pheno}.aa_labs.assoc"),
-        hla_labs = os.path.join(HLA_DIR, "{pheno}.hla_labs.assoc"),
-        indel_labs = os.path.join(INDEL_DIR, "{pheno}.indels_labs.assoc")
+        aa_labs = os.path.join(AA_DIR, "{pheno}.aa_labs.assoc.logistic"),
+        hla_labs = os.path.join(HLA_DIR, "{pheno}.hla_labs.assoc.logistic"),
+        indel_labs = os.path.join(INDEL_DIR, "{pheno}.indels_labs.assoc.logistic")
     conda:
         "plink_env"
     run:
@@ -241,7 +272,7 @@ rule make_labels:
 # =======================================================================
 rule plot_aa_assoc:
     input:
-        aa_labs = expand(os.path.join(AA_DIR, "{pheno}.aa_labs.assoc"), pheno=PHENO_COLS)
+        aa_labs = expand(os.path.join(AA_DIR, "{pheno}.aa_labs.assoc.logistic"), pheno=PHENO_COLS)
     output:
         type1_aa_plot = os.path.join(PLOTS_DIR, "assoc_typeI.jpeg"),
         type2_aa_plot = os.path.join(PLOTS_DIR, "assoc_typeII.jpeg"),

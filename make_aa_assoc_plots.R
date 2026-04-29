@@ -17,7 +17,7 @@ group_colors <- unlist(snakemake@params[["group_cols"]])
 # Load aa dataframes
 aa_all <- setNames(
   lapply(input_files, read_delim, delim = "\t", col_types = cols()),
-  sub("\\.aa_labs\\.assoc$", "", basename(input_files))
+  sub("\\.aa_labs\\.assoc.logistic$", "", basename(input_files))
 )
 
 sig_colors <- sort(group_colors[names(group_colors) != "nonsig"])
