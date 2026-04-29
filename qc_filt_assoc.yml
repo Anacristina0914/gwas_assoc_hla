@@ -1,0 +1,38 @@
+# Input paths
+bfile: "/path/to/bfile_prefix"
+out_dir: "/path/to/output_directory"
+pheno_file: "/path/to/phenotype_file.pheno"
+filt_in: "/path/to/ids_to_keep.txt"
+
+# PLINK QC filtering
+maf: 0.01
+geno: 0.05
+hwe: 0.001
+
+# Assoc params
+phenotypes:
+  - phenotype1
+  - phenotype2
+  - phenotype3
+  - phenotype4
+assoc_ci: 0.95
+
+# Regex patterns for variant extraction
+hla_pattern: "^HLA_[A-Z0-9]+_[0-9]{2}$"  # Matches HLA_XX, HLA_A, HLA_DRB1, etc.
+aa_pattern:  "^AA"    # Matches AA_XX, AA_A_52, etc.
+
+# Define colors for plotting
+group_cols:
+  phenotype1: "#72a3c7"
+  phenotype2: "#f5cd87"
+  phenotype3: "#588d7a"
+  phenotype4: "#ff876f"
+  nonsig: "gray80"
+top_n: 10 # Number of top associations to label in plots
+
+# Adjust variables for logistic regression
+adjust_vars: Age,Sex
+
+# Add script paths
+scripts:
+  aa_assoc_plot: make_aa_assoc_plots.R
